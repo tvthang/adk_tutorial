@@ -1,0 +1,61 @@
+name: Sync model version across files
+
+# Runs whenever a push touches a .py file, finds any change to a
+# `model="..."` assignment, and propagates that same change to every
+# other .py file in the repo that still has the old value.
+#
+# Instead of pushing straight to main, it opens a Pull Request so you can
+# see a before/after preview (in the PR description AND in the "Files
+# changed" diff tab) and confirm by merging — or close the PR to discard.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**/*.py"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: sync-model-version-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  sync-model-version:
+    # Skip runs triggered by merging this workflow's own PR, to avoid a
+    # push -> PR -> merge -> push loop.
+    if: "!contains(github.event.head_commit.message, '[skip model-sync]')"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Detect + apply model version sync (preview)
+        id: sync
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+          REPO_ROOT: ${{ github.workspace }}
+          REPORT_PATH: ${{ github.workspace }}/model_sync_report.md
+        run: python scripts/sync_model_version.py
+
+      - name: Open a PR for confirmation
+        if: steps.sync.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          commit-message: "chore: sync model version (${{ steps.sync.outputs.summary }}) [skip model-sync]"
+          branch: automated/sync-model-version
+          delete-branch: true
+          base: ${{ github.ref_name }}
+          title: "Sync model version: ${{ steps.sync.outputs.summary }}"
+          body-path: model_sync_report.md
+          add-paths: "**/*.py"
